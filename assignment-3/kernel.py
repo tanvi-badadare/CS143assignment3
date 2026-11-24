@@ -1,45 +1,22 @@
 ### Fill in the following information before submitting
-# Group id: 
-# Members: 
-
-
+# Group id: 16
+# Members: Bruhati Aarushi Kuchi, Rutu Aarabhi Kuchi, Tanvi Badadare
 
 from collections import deque
-from dataclasses import dataclass
 
 # PID is just an integer, but it is used to make it clear when a integer is expected to be a valid PID.
 PID = int
-
-BACKGROUND: str = "Background"
-FOREGROUND: str = "Foreground"
 
 # This class represents the PCB of processes.
 # It is only here for your convinience and can be modified however you see fit.
 class PCB:
     pid: PID
-    priority: int
-    num_quantum_ticks: int
-    process_type: str
 
-    def __init__(self, pid: PID, priority: int, process_type: str):
+    def __init__(self, pid: PID, priority: int = 0, process_type: str = "Background"):
         self.pid = pid
         self.priority = priority
-        self.num_quantum_ticks = 0
         self.process_type = process_type
-
-    def __str__(self):
-        return f"({self.pid}, {self.priority})"
-    
-    def __repr__(self):
-        return f"({self.pid}, {self.priority})"
-
-RR_QUANTUM_TICKS: int = 4
-ACTIVE_QUEUE_NUM_TICKS: int = 20
-
-MULTILEVEL: str = "Multilevel"
-RR: str = "RR"
-FCFS: str = "FCFS"
-PRIORITY: str = "Priority"
+        self.rr_ticks = 0
 
 # This class represents the Kernel of the simulation.
 # The simulator will create an instance of this object and use it to respond to syscalls and interrupts.
@@ -50,209 +27,228 @@ class Kernel:
     waiting_queue: deque[PCB]
     running: PCB
     idle_pcb: PCB
-    fcfs_ready_queue: deque[PCB]
-    rr_ready_queue: deque[PCB]
-    active_queue: str
-    active_queue_num_ticks: int
 
     # Called before the simulation begins.
-    # Use this function to initilize any variables you need throughout the simulation.
+    # Use this method to initilize any variables you need throughout the simulation.
+    # logger is provided which allows you to include your own print statements in the
+    #   output logs. These will not impact grading.
     # DO NOT rename or delete this method. DO NOT change its arguments.
     def __init__(self, scheduling_algorithm: str, logger):
         self.scheduling_algorithm = scheduling_algorithm
         self.ready_queue = deque()
         self.waiting_queue = deque()
-        self.idle_pcb = PCB(0, 0, "Foreground")
+        self.idle_pcb = PCB(0)
         self.running = self.idle_pcb
-        self.logger = logger
-        self.fcfs_ready_queue = deque()
-        self.rr_ready_queue = deque()
-        self.active_queue = FOREGROUND
-        self.active_queue_num_ticks = 0
+        self.timer_ticks = 0
 
-    # This function is triggered every time a new process has arrived.
+        self.foreground_queue = deque()
+        self.background_queue = deque()
+        self.multilevel_ticks = 0
+        self.current_level = "Foreground"
+
+    # This method is triggered every time a new process has arrived.
     # new_process is this process's PID.
-    # priority is the priority of new_process.
     # DO NOT rename or delete this method. DO NOT change its arguments.
     def new_process_arrived(self, new_process: PID, priority: int, process_type: str) -> PID:
-        self.ready_queue.append(PCB(new_process, priority, process_type))
-        if self.scheduling_algorithm == MULTILEVEL and self.running is self.idle_pcb:
-            self.active_queue_num_ticks = 0
-        self.choose_next_process()
-        return self.running.pid  
+        new_pcb = PCB(new_process, priority, process_type)
 
-    # This function is triggered every time the current process performs an exit syscall.
+        if self.scheduling_algorithm == "Priority":
+            self.ready_queue.append(new_pcb)
+            return self.choose_next_process()
+
+        elif self.scheduling_algorithm == "Multilevel":
+            if process_type == "Foreground":
+                self.foreground_queue.append(new_pcb)
+            else:
+                self.background_queue.append(new_pcb)
+
+            if self.running is self.idle_pcb:
+                if self.current_level == "Foreground":
+                    current_queue = self.foreground_queue
+                    other_queue = self.background_queue
+                    other_level = "Background"
+                else:
+                    current_queue = self.background_queue
+                    other_queue = self.foreground_queue
+                    other_level = "Foreground"
+
+                if len(current_queue) > 0:
+                    self.multilevel_ticks = 0
+                    self.running = current_queue.popleft()
+                    self.timer_ticks = self.running.rr_ticks
+                elif len(other_queue) > 0:
+                    self.current_level = other_level
+                    self.multilevel_ticks = 0
+                    self.running = other_queue.popleft()
+                    self.timer_ticks = self.running.rr_ticks
+
+            return self.running.pid
+
+        else:
+            if self.running is self.idle_pcb:
+                self.running = new_pcb
+                self.timer_ticks = 0
+                return self.running.pid
+
+            self.ready_queue.append(new_pcb)
+            return self.running.pid
+
+    # This method is triggered every time the current process performs an exit syscall.
     # DO NOT rename or delete this method. DO NOT change its arguments.
     def syscall_exit(self) -> PID:
         self.running = self.idle_pcb
-        self.choose_next_process()
+        self.timer_ticks = 0
+
+        if self.scheduling_algorithm == "Multilevel":
+            if self.current_level == "Foreground":
+                current_queue = self.foreground_queue
+                other_queue = self.background_queue
+                other_level = "Background"
+            else:
+                current_queue = self.background_queue
+                other_queue = self.foreground_queue
+                other_level = "Foreground"
+
+            if len(current_queue) > 0:
+                self.running = current_queue.popleft()
+                self.timer_ticks = self.running.rr_ticks
+                return self.running.pid
+
+            if len(other_queue) > 0:
+                self.current_level = other_level
+                self.multilevel_ticks = 0
+                self.running = other_queue.popleft()
+                self.timer_ticks = self.running.rr_ticks
+                return self.running.pid
+
+            return self.running.pid
+
+        return self.choose_next_process()
+
+    # This is where you can select the next process to run.
+    # This method is not directly called by the simulator and is purely for your convinience.
+    # Feel free to modify this method as you see fit.
+    def choose_next_process(self):
+        if self.scheduling_algorithm == "Priority":
+            options = list(self.ready_queue)
+
+            if self.running is not self.idle_pcb:
+                options.append(self.running)
+
+            if len(options) == 0:
+                self.running = self.idle_pcb
+                return self.running.pid
+
+            winning_process = max(
+                options,
+                key=lambda p: (p.priority, -p.pid)
+            )
+
+            options.remove(winning_process)
+            self.ready_queue = deque(options)
+            self.running = winning_process
+            return self.running.pid
+
+        elif self.scheduling_algorithm == "FCFS" or self.scheduling_algorithm == "RR":
+            if len(self.ready_queue) == 0:
+                self.running = self.idle_pcb
+            else:
+                self.running = self.ready_queue.popleft()
+
+            self.timer_ticks = 0
+            return self.running.pid
+
         return self.running.pid
-    
-    # This function is triggered when the currently running process requests to change its priority.
+
+    # This method is triggered when the currently running process requests to change its priority.
     # DO NOT rename or delete this method. DO NOT change its arguments.
     def syscall_set_priority(self, new_priority: int) -> PID:
         self.running.priority = new_priority
-        self.choose_next_process()
+        if self.scheduling_algorithm == "Priority":
+            return self.choose_next_process()
         return self.running.pid
-
-
-    # This is where you can select the next process to run.
-    # This function is not directly called by the simulator and is purely for your convinience.
-    # It is not required to actually use this function but it is recommended.
-    def choose_next_process(self):
-        if self.scheduling_algorithm == FCFS:
-            self.fcfs_chose_next_process(self.ready_queue)
-        elif self.scheduling_algorithm == PRIORITY:
-            if len(self.ready_queue) == 0:
-                return
-            
-            if self.running is not self.idle_pcb:
-                self.ready_queue.append(self.running)
-
-            next_process = pop_max_priority(self.ready_queue)
-            self.running = next_process
-        elif self.scheduling_algorithm == RR:
-            self.rr_chose_next_process(self.ready_queue)
-        elif self.scheduling_algorithm == MULTILEVEL:
-            # Move everything in standard ready queue to proper queues
-            while len(self.ready_queue) > 0:
-                pcb = self.ready_queue.popleft()
-                if pcb.process_type == FOREGROUND:
-                    self.rr_ready_queue.append(pcb)
-                elif pcb.process_type == BACKGROUND:
-                    self.fcfs_ready_queue.append(pcb)
-                else:
-                    print("Unknown process type")
-            
-            if self.active_queue == FOREGROUND:
-                # RR queue
-                self.rr_chose_next_process(self.rr_ready_queue)
-            elif self.active_queue == BACKGROUND:
-                # FCFS queue
-                self.fcfs_chose_next_process(self.fcfs_ready_queue)
-            if self.running is self.idle_pcb:
-                self.switch_active_queue()
-                if self.active_queue == FOREGROUND:
-                    # RR queue
-                    self.rr_chose_next_process(self.rr_ready_queue)
-                elif self.active_queue == BACKGROUND:
-                    # FCFS queue
-                    self.fcfs_chose_next_process(self.fcfs_ready_queue)
-        else:
-            print("Unknown scheduling algorithm")
-
-    def rr_chose_next_process(self, queue: deque[PCB]):
-        if self.running is self.idle_pcb:
-            if len(queue) == 0:
-                return
-        
-            self.running = queue.popleft()
-        elif exceeded_quantum(self.running):
-            queue.append(self.running)
-            self.running = queue.popleft()
-
-    def fcfs_chose_next_process(self, queue: deque[PCB]):
-        if len(queue) == 0:
-            return
-        
-        if self.running is self.idle_pcb:
-            self.running = queue.popleft()
-
-    def switch_active_queue(self):
-        self.active_queue_num_ticks = 0
-        if self.active_queue == FOREGROUND:
-            if len(self.fcfs_ready_queue) == 0:
-                return
-            self.logger.log(f"Switching queue to Background")
-            if self.running is not self.idle_pcb:
-                if exceeded_quantum(self.running):
-                    self.rr_ready_queue.append(self.running)
-                    self.running = self.idle_pcb
-                else:
-                    self.rr_ready_queue.appendleft(self.running)
-                    self.running = self.idle_pcb
-            self.active_queue = BACKGROUND
-        elif self.active_queue == BACKGROUND:
-            if len(self.rr_ready_queue) == 0:
-                return
-            self.logger.log(f"Switching queue to Foreground")
-            if self.running is not self.idle_pcb:
-                self.fcfs_ready_queue.appendleft(self.running)
-                self.running = self.idle_pcb
-            self.active_queue = FOREGROUND
-        else:
-            print("Unknown active queue")
 
     # This function represents the hardware timer interrupt.
     # It is triggered every 10 milliseconds and is the only way a kernel can track passing time.
     # Do not use real time to track how much time has passed as time is simulated.
     # DO NOT rename or delete this method. DO NOT change its arguments.
     def timer_interrupt(self) -> PID:
-        self.running.num_quantum_ticks += 1
-        self.active_queue_num_ticks += 1
-        if self.scheduling_algorithm == RR:
-            self.choose_next_process()
-        elif self.scheduling_algorithm == MULTILEVEL:
-            if self.active_queue_num_ticks >= ACTIVE_QUEUE_NUM_TICKS:
-                self.switch_active_queue()
-            self.choose_next_process()
-        return self.running.pid 
+        if self.scheduling_algorithm == "RR":
+            if self.running is self.idle_pcb:
+                return self.running.pid
+
+            self.timer_ticks += 1
+            if self.timer_ticks < 4:
+                return self.running.pid
+
+            self.timer_ticks = 0
+            if len(self.ready_queue) == 0:
+                return self.running.pid
+
+            self.ready_queue.append(self.running)
+            self.running = self.ready_queue.popleft()
+
+        elif self.scheduling_algorithm == "Multilevel":
+            if self.current_level == "Foreground" and self.running.process_type == "Foreground":
+                self.timer_ticks += 1
+                if self.timer_ticks == 4:
+                    self.running.rr_ticks = 0
+                    self.timer_ticks = 0
+                    if len(self.foreground_queue) > 0:
+                        self.foreground_queue.append(self.running)
+                        self.running = self.foreground_queue.popleft()
+                        self.timer_ticks = self.running.rr_ticks
+
+            self.multilevel_ticks += 1
+            if self.multilevel_ticks == 20:
+                self.multilevel_ticks = 0
+                if self.current_level == "Foreground":
+                    other_queue = self.background_queue
+                    other_level = "Background"
+                else:
+                    other_queue = self.foreground_queue
+                    other_level = "Foreground"
+
+                if len(other_queue) > 0:
+                    if self.running is not self.idle_pcb:
+                        self.running.rr_ticks = self.timer_ticks
+                        if self.running.process_type == "Foreground":
+                            self.foreground_queue.appendleft(self.running)
+                        else:
+                            self.background_queue.appendleft(self.running)
+                    self.current_level = other_level
+                    self.running = other_queue.popleft()
+                    self.timer_ticks = self.running.rr_ticks
+
+        return self.running.pid
+
 
     # This method is triggered when the currently running process requests to initialize a new semaphore.
     # DO NOT rename or delete this method. DO NOT change its arguments.
     def syscall_init_semaphore(self, semaphore_id: int, initial_value: int):
         return
-
+    
     # This method is triggered when the currently running process calls p() on an existing semaphore.
     # DO NOT rename or delete this method. DO NOT change its arguments.
     def syscall_semaphore_p(self, semaphore_id: int) -> PID:
         return self.running.pid
-
+    
     # This method is triggered when the currently running process calls v() on an existing semaphore.
     # DO NOT rename or delete this method. DO NOT change its arguments.
     def syscall_semaphore_v(self, semaphore_id: int) -> PID:
         return self.running.pid
-
+    
     # This method is triggered when the currently running process requests to initialize a new mutex.
     # DO NOT rename or delete this method. DO NOT change its arguments.
     def syscall_init_mutex(self, mutex_id: int):
         return
-
+    
     # This method is triggered when the currently running process calls lock() on an existing mutex.
     # DO NOT rename or delete this method. DO NOT change its arguments.
     def syscall_mutex_lock(self, mutex_id: int) -> PID:
         return self.running.pid
-
+    
     # This method is triggered when the currently running process calls unlock() on an existing mutex.
     # DO NOT rename or delete this method. DO NOT change its arguments.
     def syscall_mutex_unlock(self, mutex_id: int) -> PID:
         return self.running.pid
-
-
-def exceeded_quantum(pcb: PCB) -> bool:
-    if pcb.num_quantum_ticks >= RR_QUANTUM_TICKS:
-        pcb.num_quantum_ticks = 0
-        return True
-    else:
-        return False
-    
-def pop_max_priority(pcbs: list[PCB]) -> PCB:
-    max_index = 0
-    for i in range(1, len(pcbs)):
-        process = pcbs[i]
-        if process.priority > pcbs[max_index].priority:
-            max_index = i
-        elif process.priority == pcbs[max_index].priority and process.pid < pcbs[max_index].pid:
-            max_index = i
-    popped = pcbs[max_index]
-    del pcbs[max_index]
-    return popped
-
-def pop_min_pid(pcbs: list[PCB]):
-    lowest_pid_i = 0
-    for i in range(1, len(pcbs)):
-        if pcbs[i].pid < pcbs[lowest_pid_i].pid:
-            lowest_pid_i = i
-    popped = pcbs[lowest_pid_i]
-    del pcbs[lowest_pid_i]
-    return popped
