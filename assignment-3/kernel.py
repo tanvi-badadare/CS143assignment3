@@ -17,10 +17,7 @@ class PCB:
         self.priority = priority
         self.process_type = process_type
         self.rr_ticks = 0
-        self.semaphores = {}         # semaphore_id -> current value
-        self.semaphore_waiting = {}  # semaphore_id -> list of blocked PCBs
-        self.mutex_locked = {}       # mutex_id -> True/False
-        self.mutex_waiting = {}      # mutex_id -> list of blocked PCBs
+        
 
 # This class represents the Kernel of the simulation.
 # The simulator will create an instance of this object and use it to respond to syscalls and interrupts.
@@ -49,6 +46,11 @@ class Kernel:
         self.background_queue = deque()
         self.multilevel_ticks = 0
         self.current_level = "Foreground"
+
+        self.semaphores = {}         # semaphore_id current value
+        self.semaphore_waiting = {}  # semaphore_id list of blocked PCBs
+        self.mutex_locked = {}       # mutex_id True/False
+        self.mutex_waiting = {}      # mutex_id list of blocked PCBs
 
     # This method is triggered every time a new process has arrived.
     # new_process is this process's PID.
