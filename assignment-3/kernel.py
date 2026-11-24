@@ -17,6 +17,10 @@ class PCB:
         self.priority = priority
         self.process_type = process_type
         self.rr_ticks = 0
+        self.semaphores = {}         # semaphore_id -> current value
+        self.semaphore_waiting = {}  # semaphore_id -> list of blocked PCBs
+        self.mutex_locked = {}       # mutex_id -> True/False
+        self.mutex_waiting = {}      # mutex_id -> list of blocked PCBs
 
 # This class represents the Kernel of the simulation.
 # The simulator will create an instance of this object and use it to respond to syscalls and interrupts.
@@ -160,6 +164,29 @@ class Kernel:
 
         return self.running.pid
 
+    # Block the running process and switch to the next one.
+    def block_running(self, waiting_list):
+        waiting_list.append(self.running)
+        self.running = self.idle_pcb   
+        return self.choose_next_process()
+
+    # Pick which blocked process to release, based on the algorithm.
+    def pick_waiter(self, waiting_list):
+        if self.scheduling_algorithm == "Priority":
+            chosen = max(waiting_list, key=lambda p: (p.priority, -p.pid))
+        else:  # FCFS and RR: lowest PID
+            chosen = min(waiting_list, key=lambda p: p.pid)
+        waiting_list.remove(chosen)
+        return chosen
+
+    # Make a released process ready again.
+    def release(self, pcb):
+        self.ready_queue.append(pcb)
+        if self.scheduling_algorithm == "Priority":
+            return self.choose_next_process()   
+        return self.running.pid                 
+    
+
     # This method is triggered when the currently running process requests to change its priority.
     # DO NOT rename or delete this method. DO NOT change its arguments.
     def syscall_set_priority(self, new_priority: int) -> PID:
@@ -226,29 +253,49 @@ class Kernel:
     # This method is triggered when the currently running process requests to initialize a new semaphore.
     # DO NOT rename or delete this method. DO NOT change its arguments.
     def syscall_init_semaphore(self, semaphore_id: int, initial_value: int):
-        return
+        self.semaphores[semaphore_id] = initial_value
+        self.semaphore_waiting[semaphore_id] = []
+        #return
     
     # This method is triggered when the currently running process calls p() on an existing semaphore.
     # DO NOT rename or delete this method. DO NOT change its arguments.
     def syscall_semaphore_p(self, semaphore_id: int) -> PID:
-        return self.running.pid
+        if self.semaphores[semaphore_id] > 0:
+            self.semaphores[semaphore_id] -= 1
+            return self.running.pid
+        return self.block_running(self.semaphore_waiting[semaphore_id])
+        # return self.running.pid
     
     # This method is triggered when the currently running process calls v() on an existing semaphore.
     # DO NOT rename or delete this method. DO NOT change its arguments.
     def syscall_semaphore_v(self, semaphore_id: int) -> PID:
+        waiting = self.semaphore_waiting[semaphore_id]
+        if len(waiting) > 0:
+            return self.release(self.pick_waiter(waiting))
+        self.semaphores[semaphore_id] += 1
         return self.running.pid
     
     # This method is triggered when the currently running process requests to initialize a new mutex.
     # DO NOT rename or delete this method. DO NOT change its arguments.
     def syscall_init_mutex(self, mutex_id: int):
-        return
+        self.mutex_locked[mutex_id] = False
+        self.mutex_waiting[mutex_id] = []
+        #return
     
     # This method is triggered when the currently running process calls lock() on an existing mutex.
     # DO NOT rename or delete this method. DO NOT change its arguments.
     def syscall_mutex_lock(self, mutex_id: int) -> PID:
-        return self.running.pid
+        if not self.mutex_locked[mutex_id]:
+            self.mutex_locked[mutex_id] = True
+            return self.running.pid
+        return self.block_running(self.mutex_waiting[mutex_id])
+        #return self.running.pid
     
     # This method is triggered when the currently running process calls unlock() on an existing mutex.
     # DO NOT rename or delete this method. DO NOT change its arguments.
     def syscall_mutex_unlock(self, mutex_id: int) -> PID:
+        waiting = self.mutex_waiting[mutex_id]
+        if len(waiting) > 0:
+            return self.release(self.pick_waiter(waiting))  # lock passes to it; stays locked
+        self.mutex_locked[mutex_id] = False
         return self.running.pid
